@@ -1,0 +1,23 @@
+{
+  "name": "Discord",
+  "short_name": "Discord",
+  "description": "Discord Clone Desktop & Web - Lucaverna",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1e1f22",
+  "theme_color": "#1e1f22",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/assets/discord.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/assets/icons/tray.png",
+      "sizes": "32x32",
+      "type": "image/png"
+    }
+  ]
+}

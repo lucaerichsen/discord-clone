@@ -1,0 +1,24 @@
+{
+  "name": "discord-lucaverna-clone",
+  "version": "1.0.0",
+  "description": "Discord Clone Desktop & Web Experience reverse-engineered from local Discord app",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "electron": "npx electron electron-main.cjs"
+  },
+  "keywords": [
+    "discord",
+    "clone",
+    "reverse-engineering",
+    "electron",
+    "web"
+  ],
+  "author": "Lucaverna",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.22.0"
+  }
+}
