@@ -170,6 +170,8 @@ const RTC_CONFIG = {
 const peerConnections = new Map();
 // Map of peerId -> { user, isSpeaking, isMuted, isVideo, voiceChannelId }
 const remotePeersData = new Map();
+// Global Voice Rooms Roster: channelId -> Array of { peerId, user, isSpeaking, isMuted, isDeafened, isScreenSharing }
+const VoiceRoomsRoster = new Map();
 
 let localAudioStream = null;
 let localScreenStream = null;
@@ -190,13 +192,24 @@ const ServersData = {
     verified: false,
     categories: [
       {
-        name: 'Canais de texto',
+        name: 'INFORMAÇÕES',
         channels: [
-          { id: 'geral', name: 'geral', type: 'text', topic: 'Espaço geral para trocar ideias e mensagens.' }
+          { id: 'boas-vindas', name: 'boas-vindas', type: 'text', topic: 'Sejam bem-vindos ao servidor de lk!', unread: 2 },
+          { id: 'regras', name: 'regras', type: 'text', topic: 'Regras e diretrizes do servidor.', unread: 2 },
+          { id: 'avisos', name: 'avisos', type: 'text', topic: 'Avisos e comunicados importantes.', unread: 2 }
         ]
       },
       {
-        name: 'Canais de voz',
+        name: 'GERAL',
+        channels: [
+          { id: 'geral', name: 'chat-geral', type: 'text', topic: 'Espaço geral para trocar ideias e mensagens.' },
+          { id: 'links', name: 'links', type: 'text', topic: 'Compartilhe links úteis e interessantes.' },
+          { id: 'memes', name: 'memes', type: 'text', topic: 'Canal dedicado aos melhores memes.' },
+          { id: 'musicas', name: 'musicas', type: 'text', topic: 'Recomendações e letras de músicas.' }
+        ]
+      },
+      {
+        name: 'Geral voz',
         channels: [
           { id: 'geral-voz', name: 'Geral', type: 'voice' }
         ]
@@ -315,6 +328,52 @@ const ChannelMessages = {
 
 // --- MEMBERS DATA ---
 let OnlineUsersList = [
+  {
+    id: 'user_barbos4',
+    name: 'BARBOS4',
+    roleCategory: 'AMIGOS',
+    color: '#e9a820',
+    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=128&auto=format&fit=crop&q=80',
+    activity: 'No Discord',
+    status: 'online'
+  },
+  {
+    id: 'user_juannito',
+    name: 'Juannito.BAK',
+    roleCategory: 'AMIGOS',
+    color: '#00a8fc',
+    badge: '💎 SKIN',
+    avatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=128&auto=format&fit=crop&q=80',
+    activity: 'Jogando CS2',
+    status: 'online'
+  },
+  {
+    id: 'user_merci',
+    name: 'Merci',
+    roleCategory: 'AMIGOS',
+    color: '#5865f2',
+    avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=128&auto=format&fit=crop&q=80',
+    activity: 'Ouvindo música',
+    status: 'online'
+  },
+  {
+    id: 'user_raphael',
+    name: 'raphael',
+    roleCategory: 'AMIGOS',
+    color: '#f47b97',
+    avatar: 'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=128&auto=format&fit=crop&q=80',
+    activity: 'Online',
+    status: 'online'
+  },
+  {
+    id: 'user_tezouro',
+    name: 'Tezouro',
+    roleCategory: 'AMIGOS',
+    color: '#eb459e',
+    avatar: 'https://images.unsplash.com/photo-1501196354995-cbb51c65aaea?w=128&auto=format&fit=crop&q=80',
+    activity: 'Online',
+    status: 'online'
+  },
   {
     id: 'user_claudio',
     name: 'Claudio',
@@ -495,6 +554,13 @@ async function handleWebSocketMessage(data) {
     case 'init': {
       myPeerId = data.peerId;
       if (data.networkUrl) AppState.networkShareUrl = data.networkUrl;
+      if (data.voiceRoster) {
+        VoiceRoomsRoster.clear();
+        for (const [chId, users] of Object.entries(data.voiceRoster)) {
+          VoiceRoomsRoster.set(chId, users);
+        }
+        renderChannels();
+      }
       break;
     }
 
@@ -514,10 +580,11 @@ async function handleWebSocketMessage(data) {
         }));
 
       // Update members list
-      const baseStatic = OnlineUsersList.filter(u => u.isBot || u.id === 'user_claudio' || u.id === 'user_sophia');
+      const baseStatic = OnlineUsersList.filter(u => u.isBot || u.id.startsWith('user_barbos') || u.id.startsWith('user_juan') || u.id.startsWith('user_merci') || u.id.startsWith('user_raphael') || u.id.startsWith('user_tezouro') || u.id === 'user_claudio' || u.id === 'user_sophia');
       OnlineUsersList = [...baseStatic, ...remoteUsers];
       renderMembers();
       renderFriendsHub();
+      renderChannels();
       break;
     }
 
@@ -538,6 +605,16 @@ async function handleWebSocketMessage(data) {
       if (indicator && data.channelId === AppState.currentChannelId) {
         indicator.innerText = data.isTyping ? `${data.userName} está digitando...` : '';
       }
+      break;
+    }
+
+    // --- GLOBAL VOICE ROSTER UPDATE ---
+    case 'voice:roster_update': {
+      VoiceRoomsRoster.clear();
+      for (const [chId, users] of Object.entries(data.roster || {})) {
+        VoiceRoomsRoster.set(chId, users);
+      }
+      renderChannels();
       break;
     }
 
@@ -570,6 +647,14 @@ async function handleWebSocketMessage(data) {
     }
 
     case 'voice:speaking': {
+      // Update in roster
+      for (const [chId, users] of VoiceRoomsRoster.entries()) {
+        const found = users.find(u => u.peerId === data.peerId);
+        if (found) {
+          found.isSpeaking = !!data.isSpeaking;
+        }
+      }
+
       const card = document.getElementById(`voice-card-${data.peerId}`);
       if (card) {
         if (data.isSpeaking) {
@@ -586,6 +671,17 @@ async function handleWebSocketMessage(data) {
           treePeer.classList.remove('speaking');
         }
       }
+      break;
+    }
+
+    case 'voice:mute': {
+      for (const [chId, users] of VoiceRoomsRoster.entries()) {
+        const found = users.find(u => u.peerId === data.peerId);
+        if (found) {
+          found.isMuted = !!data.isMuted;
+        }
+      }
+      renderChannels();
       break;
     }
 
@@ -768,16 +864,24 @@ async function handleVoiceChannelClick(channelId, channelName) {
   }
 
   try {
-    // 1. Request real microphone access
-    localAudioStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true
-      },
-      video: false
-    });
-    console.log('[WebRTC] Microfone real capturado com sucesso!');
+    // 1. Request microphone access with timeout fallback
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Mic timeout')), 1200)
+      );
+      localAudioStream = await Promise.race([
+        navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          },
+          video: false
+        }),
+        timeoutPromise
+      ]);
+      console.log('[WebRTC] Microfone real capturado com sucesso!');
+    }
   } catch (err) {
     console.warn('[WebRTC] Permissão de microfone não concedida ou dispositivo ausente:', err);
     showToast('Aviso: Microfone não disponível. Você está conectado como ouvinte.');
@@ -808,7 +912,8 @@ async function handleVoiceChannelClick(channelId, channelName) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({
       type: 'voice:join',
-      voiceChannelId: channelId
+      voiceChannelId: channelId,
+      isMuted: AppState.isMuted
     }));
   }
 
@@ -1122,6 +1227,13 @@ function renderChannels() {
       item.dataset.channelId = ch.id;
 
       if (isVoice) {
+        // Query global VoiceRoomsRoster from server
+        const rosterPeers = VoiceRoomsRoster.get(ch.id) || [];
+        // Remote peers in this voice channel (exclude local user so no duplicate)
+        const remotePeersInVoice = rosterPeers.filter(p => p.peerId !== myPeerId);
+        const totalUsersInVoice = (isConnectedVoice ? 1 : 0) + remotePeersInVoice.length;
+        const hasUsersInVoice = totalUsersInVoice > 0;
+
         item.innerHTML = `
           <div class="channel-icon voice-icon">
             <svg viewBox="0 0 24 24">
@@ -1129,12 +1241,10 @@ function renderChannels() {
             </svg>
           </div>
           <div class="channel-name">${ch.name}</div>
+          ${hasUsersInVoice ? `<div class="voice-call-timer-pill" title="Em chamada">${totalUsersInVoice > 1 ? totalUsersInVoice + ' conectados' : '53:20'}</div>` : ''}
           <div class="channel-actions">
             <button class="channel-action-btn invite-btn" title="Criar convite">
               <svg viewBox="0 0 24 24"><path d="M15 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm-9-2V7H4v3H1v2h3v3h2v-3h3v-2H6zm9 4c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
-            </button>
-            <button class="channel-action-btn settings-btn" title="Editar canal">
-              <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
             </button>
           </div>
         `;
@@ -1144,11 +1254,6 @@ function renderChannels() {
           copyInviteLink();
         });
 
-        item.querySelector('.settings-btn')?.addEventListener('click', (e) => {
-          e.stopPropagation();
-          showToast(`Configurações de canal: ${ch.name}`);
-        });
-
         item.addEventListener('click', () => {
           handleVoiceChannelClick(ch.id, ch.name);
         });
@@ -1156,10 +1261,17 @@ function renderChannels() {
         catItems.appendChild(item);
 
         // If local user or remote peers are in this voice channel, render the indented user tree!
-        const peersInChannel = Array.from(remotePeersData.values()).filter(p => !p.voiceChannelId || p.voiceChannelId === ch.id);
-        const hasUsersInVoice = isConnectedVoice || peersInChannel.length > 0;
-
         if (hasUsersInVoice) {
+          // Status line shown in screenshot: "Definir um status do canal ✎"
+          const statusRow = document.createElement('div');
+          statusRow.className = 'voice-channel-status-row';
+          statusRow.innerHTML = `<span>Definir um status do canal</span><span style="font-size:10px;">✎</span>`;
+          statusRow.addEventListener('click', (e) => {
+            e.stopPropagation();
+            showToast('Canal de voz ativo: Geral');
+          });
+          catItems.appendChild(statusRow);
+
           const treeContainer = document.createElement('div');
           treeContainer.className = 'voice-channel-users-tree';
           treeContainer.id = `voice-tree-${ch.id}`;
@@ -1182,7 +1294,7 @@ function renderChannels() {
                 ${avatarContent}
               </div>
               <span class="voice-tree-name">${AppState.user.name}</span>
-              ${AppState.isMuted ? '<span class="voice-tree-mute-icon">🔇</span>' : ''}
+              ${AppState.isMuted ? '<span class="voice-tree-mute-icon" title="Mutado">🔇</span>' : ''}
             `;
 
             localRow.addEventListener('click', (e) => {
@@ -1194,8 +1306,8 @@ function renderChannels() {
             treeContainer.appendChild(localRow);
           }
 
-          // Remote peers rows
-          peersInChannel.forEach(peer => {
+          // Remote peers rows (from global VoiceRoomsRoster)
+          remotePeersInVoice.forEach(peer => {
             const peerRow = document.createElement('div');
             peerRow.className = `voice-tree-user ${peer.isSpeaking ? 'speaking' : ''}`;
             peerRow.id = `peer-voice-tree-${peer.peerId}`;
@@ -1204,7 +1316,7 @@ function renderChannels() {
             if (peer.user?.avatar && peer.user.avatar.startsWith('http')) {
               peerAvatar = `<img src="${peer.user.avatar}" alt="${peer.user?.name || 'Amigo'}" />`;
             } else {
-              peerAvatar = (peer.user?.name || 'LK').substring(0, 2).toUpperCase();
+              peerAvatar = (peer.user?.avatarInitials || peer.user?.name || 'AM').substring(0, 2).toUpperCase();
             }
 
             peerRow.innerHTML = `
@@ -1212,8 +1324,18 @@ function renderChannels() {
                 ${peerAvatar}
               </div>
               <span class="voice-tree-name">${peer.user?.name || 'Amigo'}</span>
-              ${peer.isMuted ? '<span class="voice-tree-mute-icon">🔇</span>' : ''}
+              ${peer.isMuted ? '<span class="voice-tree-mute-icon" title="Mutado">🔇</span>' : ''}
             `;
+
+            peerRow.addEventListener('click', (e) => {
+              e.stopPropagation();
+              if (isConnectedVoice) {
+                const overlay = document.getElementById('voice-room-overlay');
+                if (overlay) overlay.classList.toggle('active');
+              } else {
+                handleVoiceChannelClick(ch.id, ch.name);
+              }
+            });
 
             treeContainer.appendChild(peerRow);
           });
@@ -1228,6 +1350,7 @@ function renderChannels() {
             <svg viewBox="0 0 24 24"><path d="M5.88 21h3.35l.84-5.2h4.55L13.78 21h3.35l.84-5.2H22v-2.8h-3.67l.63-3.8h3.04V6.4h-2.58l.84-5.2h-3.35l-.84 5.2H9.91l.84-5.2H7.4l-.84 5.2H2v2.8h4.21l-.63 3.8H2v2.8h3.25L4.41 21h1.47zm4.87-8h4.55l-.63 3.8H10.12l.63-3.8z"/></svg>
           </div>
           <div class="channel-name">${ch.name}</div>
+          ${ch.unread ? `<div class="channel-unread-badge">${ch.unread}</div>` : ''}
         `;
 
         item.addEventListener('click', () => {
@@ -1708,14 +1831,24 @@ function setupEventListeners() {
     if (AppState.isMuted) {
       muteBtn?.classList.add('active-danger');
       voiceMicBtn?.classList.add('danger');
-      document.getElementById('local-mute-icon-tag').style.display = 'inline';
+      const muteTag = document.getElementById('local-mute-icon-tag');
+      if (muteTag) muteTag.style.display = 'inline';
       sounds.playMute();
     } else {
       muteBtn?.classList.remove('active-danger');
       voiceMicBtn?.classList.remove('danger');
-      document.getElementById('local-mute-icon-tag').style.display = 'none';
+      const muteTag = document.getElementById('local-mute-icon-tag');
+      if (muteTag) muteTag.style.display = 'none';
       sounds.playUnmute();
     }
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'voice:mute',
+        isMuted: AppState.isMuted
+      }));
+    }
+    renderChannels();
   };
   muteBtn?.addEventListener('click', toggleMute);
   voiceMicBtn?.addEventListener('click', toggleMute);

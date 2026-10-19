@@ -92,7 +92,7 @@ const server = http.createServer((req, res) => {
 // --- WEBSOCKET SERVER (WebRTC Signaling + Chat Broadcast) ---
 const wss = new WebSocketServer({ server });
 
-// Map of peerId -> { ws, user, channelId, voiceChannelId }
+// Map of peerId -> { ws, peerId, user, channelId, voiceChannelId, isSpeaking, isMuted, isDeafened, isScreenSharing }
 const clients = new Map();
 
 function broadcast(data, filterFn = null) {
@@ -104,6 +104,35 @@ function broadcast(data, filterFn = null) {
       }
     }
   }
+}
+
+// Return current voice roster: { [voiceChannelId]: [ { peerId, user, isSpeaking, isMuted, isDeafened, isScreenSharing } ] }
+function getVoiceRoomsRoster() {
+  const roster = {};
+  for (const [peerId, client] of clients.entries()) {
+    if (client.voiceChannelId) {
+      if (!roster[client.voiceChannelId]) {
+        roster[client.voiceChannelId] = [];
+      }
+      roster[client.voiceChannelId].push({
+        peerId,
+        user: client.user,
+        isSpeaking: !!client.isSpeaking,
+        isMuted: !!client.isMuted,
+        isDeafened: !!client.isDeafened,
+        isScreenSharing: !!client.isScreenSharing
+      });
+    }
+  }
+  return roster;
+}
+
+// Broadcast voice roster to ALL clients on the server
+function broadcastVoiceRoster() {
+  broadcast({
+    type: 'voice:roster_update',
+    roster: getVoiceRoomsRoster()
+  });
 }
 
 wss.on('connection', (ws) => {
@@ -119,14 +148,19 @@ wss.on('connection', (ws) => {
       status: 'online'
     },
     channelId: 'geral',
-    voiceChannelId: null
+    voiceChannelId: null,
+    isSpeaking: false,
+    isMuted: false,
+    isDeafened: false,
+    isScreenSharing: false
   });
 
-  // Send initial handshake with peer ID
+  // Send initial handshake with peer ID and current global voice roster
   ws.send(JSON.stringify({
     type: 'init',
     peerId,
-    networkUrl: `http://${localIp}:${PORT}`
+    networkUrl: `http://${localIp}:${PORT}`,
+    voiceRoster: getVoiceRoomsRoster()
   }));
 
   ws.on('message', (messageRaw) => {
@@ -150,6 +184,8 @@ wss.on('connection', (ws) => {
               voiceChannelId: c.voiceChannelId
             }))
           });
+          // Broadcast voice roster so the user's custom name/avatar appears in voice tree
+          broadcastVoiceRoster();
           break;
         }
 
@@ -179,8 +215,8 @@ wss.on('connection', (ws) => {
 
         case 'voice:join': {
           const previousVoice = client.voiceChannelId;
-          if (previousVoice) {
-            // Notify others in previous channel that peer left
+          if (previousVoice && previousVoice !== data.voiceChannelId) {
+            // Notify peers in previous channel that peer left call
             broadcast({
               type: 'voice:peer_left',
               voiceChannelId: previousVoice,
@@ -189,44 +225,51 @@ wss.on('connection', (ws) => {
           }
 
           client.voiceChannelId = data.voiceChannelId;
+          client.isSpeaking = false;
+          client.isMuted = !!data.isMuted;
 
-          // Get list of existing peers in this voice channel
+          // 1. WebRTC signaling: Send list of existing peers in this voice room
           const existingPeers = [];
           for (const [id, c] of clients.entries()) {
             if (id !== peerId && c.voiceChannelId === data.voiceChannelId) {
               existingPeers.push({
                 peerId: id,
                 user: c.user,
-                isSpeaking: false,
-                isMuted: false,
-                isVideo: false
+                isSpeaking: !!c.isSpeaking,
+                isMuted: !!c.isMuted,
+                isVideo: !!c.isScreenSharing
               });
             }
           }
 
-          // Reply to the joining peer with the existing peers in this room
           ws.send(JSON.stringify({
             type: 'voice:existing_peers',
             voiceChannelId: data.voiceChannelId,
             peers: existingPeers
           }));
 
-          // Notify other peers in this room that a new peer joined
+          // 2. WebRTC signaling: Notify peers in this voice room that a new peer joined
           broadcast({
             type: 'voice:peer_joined',
             voiceChannelId: data.voiceChannelId,
             peer: {
               peerId,
-              user: client.user
+              user: client.user,
+              isMuted: client.isMuted,
+              isSpeaking: false
             }
           }, (c, id) => c.voiceChannelId === data.voiceChannelId && id !== peerId);
 
-          // Update presence
+          // 3. GLOBAL BROADCAST: Notify ALL clients on server so voice tree updates in sidebar!
+          broadcastVoiceRoster();
+
+          // 4. Update presence
           broadcast({
             type: 'presence:update',
             users: Array.from(clients.values()).map(c => ({
               id: c.peerId,
               user: c.user,
+              channelId: c.channelId,
               voiceChannelId: c.voiceChannelId
             }))
           });
@@ -247,28 +290,49 @@ wss.on('connection', (ws) => {
         }
 
         case 'voice:speaking': {
+          client.isSpeaking = !!data.isSpeaking;
+          // Broadcast speaking state globally to ALL clients so sidebar green ring updates
           broadcast({
             type: 'voice:speaking',
             peerId,
             voiceChannelId: client.voiceChannelId,
             isSpeaking: !!data.isSpeaking
-          }, (c, id) => c.voiceChannelId === client.voiceChannelId && id !== peerId);
+          });
+          break;
+        }
+
+        case 'voice:mute': {
+          client.isMuted = !!data.isMuted;
+          broadcast({
+            type: 'voice:mute',
+            peerId,
+            voiceChannelId: client.voiceChannelId,
+            isMuted: client.isMuted
+          });
+          broadcastVoiceRoster();
           break;
         }
 
         case 'voice:state': {
+          if (data.state) {
+            if (data.state.isMuted !== undefined) client.isMuted = !!data.state.isMuted;
+            if (data.state.isDeafened !== undefined) client.isDeafened = !!data.state.isDeafened;
+            if (data.state.isScreenSharing !== undefined) client.isScreenSharing = !!data.state.isScreenSharing;
+          }
           broadcast({
             type: 'voice:state',
             peerId,
             voiceChannelId: client.voiceChannelId,
             state: data.state
-          }, (c, id) => c.voiceChannelId === client.voiceChannelId && id !== peerId);
+          });
+          broadcastVoiceRoster();
           break;
         }
 
         case 'voice:leave': {
           const vChannel = client.voiceChannelId;
           client.voiceChannelId = null;
+          client.isSpeaking = false;
           if (vChannel) {
             broadcast({
               type: 'voice:peer_left',
@@ -276,11 +340,15 @@ wss.on('connection', (ws) => {
               peerId
             }, (c, id) => c.voiceChannelId === vChannel && id !== peerId);
           }
+          // Global roster update
+          broadcastVoiceRoster();
+
           broadcast({
             type: 'presence:update',
             users: Array.from(clients.values()).map(c => ({
               id: c.peerId,
               user: c.user,
+              channelId: c.channelId,
               voiceChannelId: c.voiceChannelId
             }))
           });
@@ -303,11 +371,15 @@ wss.on('connection', (ws) => {
     }
     clients.delete(peerId);
 
+    // Global roster update
+    broadcastVoiceRoster();
+
     broadcast({
       type: 'presence:update',
       users: Array.from(clients.values()).map(c => ({
         id: c.peerId,
         user: c.user,
+        channelId: c.channelId,
         voiceChannelId: c.voiceChannelId
       }))
     });

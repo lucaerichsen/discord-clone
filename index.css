@@ -760,6 +760,31 @@ input, textarea, button, select {
   font-size: 12px;
 }
 
+.voice-channel-status-row {
+  font-size: 11.5px;
+  color: #949ba4;
+  padding-left: 32px;
+  padding-top: 2px;
+  padding-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.voice-channel-status-row:hover {
+  color: #dbdee1;
+}
+
+.voice-call-timer-pill {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: #23a55a;
+  letter-spacing: 0.5px;
+}
+
 .channel-icon {
   width: 20px;
   height: 20px;
