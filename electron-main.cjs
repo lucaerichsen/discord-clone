@@ -29,7 +29,11 @@ function createWindow() {
     }
   });
 
-  mainWindow.loadURL('http://localhost:3000');
+  // URL do servidor (se estiver rodando online no Render ou localmente)
+  const isDev = process.env.NODE_ENV === 'development';
+  const targetUrl = isDev ? 'http://localhost:3000' : 'https://discord-clone-b2dk.onrender.com';
+
+  mainWindow.loadURL(targetUrl);
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
