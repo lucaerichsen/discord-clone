@@ -185,10 +185,11 @@ let ws = null;
 let myPeerId = null;
 
 // --- SERVERS & CHANNELS DATA ---
-const ServersData = {
+const defaultServersData = {
   'servidor-lk': {
     name: 'Servidor de lk',
     iconText: 'SD',
+    color: '#5865f2',
     verified: false,
     categories: [
       {
@@ -219,6 +220,7 @@ const ServersData = {
   'lucaverna-devs': {
     name: 'Lucaverna Devs',
     iconText: 'LD',
+    color: '#23a55a',
     verified: true,
     banner: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&auto=format&fit=crop&q=80',
     categories: [
@@ -253,6 +255,7 @@ const ServersData = {
   'typescript-br': {
     name: 'TypeScript Brasil',
     iconText: 'TS',
+    color: '#3178c6',
     verified: false,
     categories: [
       {
@@ -273,6 +276,7 @@ const ServersData = {
   'cyberpunk-hub': {
     name: 'Cyberpunk Hub',
     iconText: 'CP',
+    color: '#eb459e',
     verified: false,
     categories: [
       {
@@ -285,6 +289,26 @@ const ServersData = {
     ]
   }
 };
+
+let ServersData = {};
+try {
+  const cachedServers = localStorage.getItem('discord_servers_data_v2');
+  if (cachedServers) {
+    ServersData = JSON.parse(cachedServers);
+  } else {
+    ServersData = { ...defaultServersData };
+  }
+} catch (e) {
+  ServersData = { ...defaultServersData };
+}
+
+function saveServersData() {
+  try {
+    localStorage.setItem('discord_servers_data_v2', JSON.stringify(ServersData));
+  } catch (e) {
+    console.error('Erro ao salvar servidores no localStorage:', e);
+  }
+}
 
 // --- PRE-LOADED MESSAGES ---
 const ChannelMessages = {
@@ -714,6 +738,17 @@ async function initiatePeerConnection(peerId, isCaller) {
     });
   }
 
+  // Add active video tracks if screen share or camera is currently on
+  if (localScreenStream) {
+    localScreenStream.getVideoTracks().forEach(track => {
+      pc.addTrack(track, localScreenStream);
+    });
+  } else if (localCameraStream) {
+    localCameraStream.getVideoTracks().forEach(track => {
+      pc.addTrack(track, localCameraStream);
+    });
+  }
+
   // Handle ICE candidates
   pc.onicecandidate = (event) => {
     if (event.candidate && ws && ws.readyState === WebSocket.OPEN) {
@@ -739,7 +774,11 @@ async function initiatePeerConnection(peerId, isCaller) {
       }
       audioEl.srcObject = event.streams[0];
     } else if (event.track.kind === 'video') {
-      const card = document.getElementById(`voice-card-${peerId}`);
+      let card = document.getElementById(`voice-card-${peerId}`);
+      if (!card) {
+        addPeerVoiceCard(peerId, remotePeersData.get(peerId)?.user);
+        card = document.getElementById(`voice-card-${peerId}`);
+      }
       if (card) {
         let videoEl = card.querySelector('video');
         if (!videoEl) {
@@ -751,7 +790,12 @@ async function initiatePeerConnection(peerId, isCaller) {
         }
         videoEl.srcObject = event.streams[0];
         videoEl.style.display = 'block';
+        videoEl.play().catch(() => {});
+        const avatarImg = card.querySelector('.voice-user-avatar-lg');
+        if (avatarImg) avatarImg.style.display = 'none';
       }
+      const overlay = document.getElementById('voice-room-overlay');
+      if (overlay) overlay.classList.add('active');
     }
   };
 
@@ -978,6 +1022,15 @@ function disconnectVoice(playSound = true) {
     localVideo.srcObject = null;
     localVideo.style.display = 'none';
   }
+  const avatar = document.getElementById('local-voice-avatar');
+  if (avatar) avatar.style.display = 'block';
+
+  AppState.isScreenSharing = false;
+  AppState.isCameraOn = false;
+  document.getElementById('voice-share-screen-btn')?.classList.remove('active-control');
+  document.getElementById('voice-camera-btn')?.classList.remove('active-control');
+  document.getElementById('panel-share-screen-btn')?.classList.remove('active');
+  document.getElementById('panel-camera-btn')?.classList.remove('active');
 
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'voice:leave' }));
@@ -1013,6 +1066,23 @@ function removePeerVoiceCard(peerId) {
   if (audioEl) audioEl.remove();
 }
 
+// Helper to renegotiate SDP when video tracks are added/replaced/removed
+async function sendRenegotiationOffer(peerId, pc) {
+  try {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'voice:signal',
+        targetPeerId: peerId,
+        signal: { description: pc.localDescription }
+      }));
+    }
+  } catch (err) {
+    console.warn('[WebRTC] Erro na renegociação com peer:', peerId, err);
+  }
+}
+
 // Real Screen Share
 async function toggleScreenShare() {
   if (AppState.isScreenSharing) {
@@ -1022,45 +1092,97 @@ async function toggleScreenShare() {
       localScreenStream = null;
     }
     AppState.isScreenSharing = false;
-    const btn = document.getElementById('voice-share-screen-btn');
-    if (btn) btn.classList.remove('active-control');
+    document.getElementById('voice-share-screen-btn')?.classList.remove('active-control');
+    document.getElementById('panel-share-screen-btn')?.classList.remove('active');
 
     const videoPreview = document.getElementById('local-video-preview');
-    if (videoPreview) {
-      videoPreview.srcObject = null;
-      videoPreview.style.display = 'none';
+    const avatar = document.getElementById('local-voice-avatar');
+
+    if (AppState.isCameraOn && localCameraStream) {
+      // Revert to camera stream
+      if (videoPreview) {
+        videoPreview.srcObject = localCameraStream;
+        videoPreview.style.display = 'block';
+        videoPreview.play().catch(() => {});
+      }
+      const camTrack = localCameraStream.getVideoTracks()[0];
+      peerConnections.forEach((pc) => {
+        const senders = pc.getSenders();
+        const videoSender = senders.find(s => s.track && s.track.kind === 'video');
+        if (videoSender && camTrack) {
+          videoSender.replaceTrack(camTrack);
+        }
+      });
+    } else {
+      if (videoPreview) {
+        videoPreview.srcObject = null;
+        videoPreview.style.display = 'none';
+      }
+      if (avatar) avatar.style.display = 'block';
+
+      // Remove video track from peers
+      peerConnections.forEach((pc, peerId) => {
+        const senders = pc.getSenders();
+        const videoSender = senders.find(s => s.track && s.track.kind === 'video');
+        if (videoSender) {
+          pc.removeTrack(videoSender);
+          sendRenegotiationOffer(peerId, pc);
+        }
+      });
     }
     showToast('Compartilhamento de tela encerrado.');
   } else {
+    // If not in voice call, connect first!
+    if (!AppState.isVoiceConnected) {
+      await handleVoiceChannelClick('voz-geral', 'Lounge Geral');
+    }
+
     try {
       localScreenStream = await navigator.mediaDevices.getDisplayMedia({
         video: true,
-        audio: true
+        audio: false
       });
 
       AppState.isScreenSharing = true;
-      const btn = document.getElementById('voice-share-screen-btn');
-      if (btn) btn.classList.add('active-control');
+      document.getElementById('voice-share-screen-btn')?.classList.add('active-control');
+      document.getElementById('panel-share-screen-btn')?.classList.add('active');
+
+      // Open voice room overlay so user and peers can see the screen
+      const overlay = document.getElementById('voice-room-overlay');
+      if (overlay) overlay.classList.add('active');
 
       const videoPreview = document.getElementById('local-video-preview');
       if (videoPreview) {
         videoPreview.srcObject = localScreenStream;
         videoPreview.style.display = 'block';
+        videoPreview.play().catch(() => {});
       }
+      const avatar = document.getElementById('local-voice-avatar');
+      if (avatar) avatar.style.display = 'none';
 
-      // Add screen video track to all existing peer connections
+      // Add or replace screen video track to all existing peer connections
       const videoTrack = localScreenStream.getVideoTracks()[0];
-      peerConnections.forEach(pc => {
-        pc.addTrack(videoTrack, localScreenStream);
+      peerConnections.forEach((pc, peerId) => {
+        const senders = pc.getSenders();
+        const videoSender = senders.find(s => s.track && s.track.kind === 'video');
+        if (videoSender) {
+          videoSender.replaceTrack(videoTrack);
+        } else {
+          pc.addTrack(videoTrack, localScreenStream);
+          sendRenegotiationOffer(peerId, pc);
+        }
       });
 
       videoTrack.onended = () => {
-        toggleScreenShare();
+        if (AppState.isScreenSharing) toggleScreenShare();
       };
 
       showToast('Compartilhando tela em tempo real!');
     } catch (err) {
-      console.warn('Compartilhamento cancelado ou negado:', err);
+      console.warn('Compartilhamento de tela cancelado ou negado:', err);
+      if (err.name !== 'NotAllowedError' && err.name !== 'AbortError') {
+        showToast('Não foi possível compartilhar a tela: ' + (err.message || 'Erro de permissão'));
+      }
     }
   }
 }
@@ -1073,38 +1195,258 @@ async function toggleCamera() {
       localCameraStream = null;
     }
     AppState.isCameraOn = false;
-    const btn = document.getElementById('voice-camera-btn');
-    if (btn) btn.classList.remove('active-control');
+    document.getElementById('voice-camera-btn')?.classList.remove('active-control');
+    document.getElementById('panel-camera-btn')?.classList.remove('active');
 
     const videoPreview = document.getElementById('local-video-preview');
-    if (videoPreview && !AppState.isScreenSharing) {
-      videoPreview.srcObject = null;
-      videoPreview.style.display = 'none';
+    const avatar = document.getElementById('local-voice-avatar');
+
+    if (AppState.isScreenSharing && localScreenStream) {
+      // Revert to screen stream
+      if (videoPreview) {
+        videoPreview.srcObject = localScreenStream;
+        videoPreview.style.display = 'block';
+        videoPreview.play().catch(() => {});
+      }
+      const screenTrack = localScreenStream.getVideoTracks()[0];
+      peerConnections.forEach((pc) => {
+        const senders = pc.getSenders();
+        const videoSender = senders.find(s => s.track && s.track.kind === 'video');
+        if (videoSender && screenTrack) {
+          videoSender.replaceTrack(screenTrack);
+        }
+      });
+    } else {
+      if (videoPreview) {
+        videoPreview.srcObject = null;
+        videoPreview.style.display = 'none';
+      }
+      if (avatar) avatar.style.display = 'block';
+
+      // Remove video track from peers
+      peerConnections.forEach((pc, peerId) => {
+        const senders = pc.getSenders();
+        const videoSender = senders.find(s => s.track && s.track.kind === 'video');
+        if (videoSender) {
+          pc.removeTrack(videoSender);
+          sendRenegotiationOffer(peerId, pc);
+        }
+      });
     }
+    showToast('Câmera desativada.');
   } else {
+    // If not in voice call, connect first!
+    if (!AppState.isVoiceConnected) {
+      await handleVoiceChannelClick('voz-geral', 'Lounge Geral');
+    }
+
     try {
       localCameraStream = await navigator.mediaDevices.getUserMedia({
-        video: true
+        video: true,
+        audio: false
       });
       AppState.isCameraOn = true;
-      const btn = document.getElementById('voice-camera-btn');
-      if (btn) btn.classList.add('active-control');
+      document.getElementById('voice-camera-btn')?.classList.add('active-control');
+      document.getElementById('panel-camera-btn')?.classList.add('active');
+
+      // Open voice room overlay so user can see camera
+      const overlay = document.getElementById('voice-room-overlay');
+      if (overlay) overlay.classList.add('active');
 
       const videoPreview = document.getElementById('local-video-preview');
       if (videoPreview) {
         videoPreview.srcObject = localCameraStream;
         videoPreview.style.display = 'block';
+        videoPreview.play().catch(() => {});
       }
+      const avatar = document.getElementById('local-voice-avatar');
+      if (avatar) avatar.style.display = 'none';
 
       const videoTrack = localCameraStream.getVideoTracks()[0];
-      peerConnections.forEach(pc => {
-        pc.addTrack(videoTrack, localCameraStream);
+      peerConnections.forEach((pc, peerId) => {
+        const senders = pc.getSenders();
+        const videoSender = senders.find(s => s.track && s.track.kind === 'video');
+        if (videoSender) {
+          videoSender.replaceTrack(videoTrack);
+        } else {
+          pc.addTrack(videoTrack, localCameraStream);
+          sendRenegotiationOffer(peerId, pc);
+        }
       });
+
+      videoTrack.onended = () => {
+        if (AppState.isCameraOn) toggleCamera();
+      };
+
+      showToast('Câmera ativada!');
     } catch (err) {
       console.warn('Câmera indisponível:', err);
-      showToast('Aviso: Câmera não disponível no momento.');
+      if (err.name === 'NotFoundError') {
+        showToast('Nenhuma câmera/webcam física detectada neste computador.');
+      } else if (err.name === 'NotAllowedError') {
+        showToast('Permissão de acesso à câmera foi recusada.');
+      } else {
+        showToast('Aviso: Câmera não disponível (' + (err.message || 'Erro') + ').');
+      }
     }
   }
+}
+
+// --- SERVER MANAGEMENT (CREATE / DELETE / CONTEXT MENU) ---
+let selectedServerColor = '#5865f2';
+let serverToDeleteId = null;
+
+function openCreateServerModal() {
+  const modal = document.getElementById('create-server-modal');
+  const input = document.getElementById('new-server-name-input');
+  if (input) {
+    input.value = `Servidor de ${AppState.user.name || 'Claudio'}`;
+  }
+  modal?.classList.add('open');
+  setTimeout(() => input?.focus(), 80);
+}
+
+function closeCreateServerModal() {
+  document.getElementById('create-server-modal')?.classList.remove('open');
+}
+
+function handleCreateServerConfirm() {
+  const input = document.getElementById('new-server-name-input');
+  const name = input?.value.trim();
+  if (!name) {
+    showToast('Por favor, informe o nome do servidor.');
+    return;
+  }
+
+  const words = name.split(/\s+/).filter(Boolean);
+  let iconText = words.length >= 2 
+    ? (words[0][0] + words[1][0]).toUpperCase() 
+    : name.slice(0, 2).toUpperCase();
+
+  const serverId = 'srv-' + Date.now().toString(36) + Math.random().toString(36).substr(2, 4);
+
+  const newServer = {
+    name,
+    iconText,
+    color: selectedServerColor || '#5865f2',
+    verified: false,
+    categories: [
+      {
+        name: 'CANAIS DE TEXTO',
+        channels: [
+          { id: `c-geral-${serverId}`, name: '💬-geral', type: 'text', topic: `Boas-vindas ao ${name}!` },
+          { id: `c-anuncios-${serverId}`, name: '📢-anúncios', type: 'text', topic: 'Avisos da comunidade' }
+        ]
+      },
+      {
+        name: 'CANAIS DE VOZ',
+        channels: [
+          { id: `v-lounge-${serverId}`, name: '🔊 Lounge Geral', type: 'voice' },
+          { id: `v-jogos-${serverId}`, name: '🎮 Resenha & Jogos', type: 'voice' }
+        ]
+      }
+    ]
+  };
+
+  ServersData[serverId] = newServer;
+  saveServersData();
+
+  ChannelMessages[`c-geral-${serverId}`] = [
+    {
+      id: 'msg-' + Date.now(),
+      user: { name: 'Discord Bot', avatar: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=128&auto=format&fit=crop&q=80', bot: true },
+      time: 'Hoje às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      content: `🎉 Bem-vindo ao novo servidor **${name}**! Criado por você. Convide amigos ou crie novas conversas!`
+    }
+  ];
+
+  closeCreateServerModal();
+  renderServers();
+
+  // Switch to new server
+  AppState.viewMode = 'server';
+  AppState.currentServerId = serverId;
+  AppState.currentChannelId = `c-geral-${serverId}`;
+  AppState.currentChannelName = '💬-geral';
+  AppState.currentChannelTopic = `Boas-vindas ao ${name}!`;
+  switchToServerView();
+
+  showToast(`Servidor "${name}" criado com sucesso!`);
+}
+
+function openDeleteServerModal(serverId) {
+  const targetId = serverId || AppState.currentServerId;
+  const server = ServersData[targetId];
+  if (!server) return;
+
+  const serverKeys = Object.keys(ServersData);
+  if (serverKeys.length <= 1) {
+    showToast('Você não pode excluir o único servidor restante.');
+    return;
+  }
+
+  serverToDeleteId = targetId;
+  const desc = document.getElementById('delete-server-modal-desc');
+  if (desc) {
+    desc.innerText = `Você tem certeza que deseja excluir o servidor "${server.name}"? Esta ação removerá todos os canais e mensagens dele.`;
+  }
+  hideServerDropdownMenu();
+  document.getElementById('delete-server-modal')?.classList.add('open');
+}
+
+function closeDeleteServerModal() {
+  serverToDeleteId = null;
+  document.getElementById('delete-server-modal')?.classList.remove('open');
+}
+
+function handleDeleteServerConfirm() {
+  if (!serverToDeleteId) return;
+  const serverName = ServersData[serverToDeleteId]?.name || 'Servidor';
+  delete ServersData[serverToDeleteId];
+  saveServersData();
+
+  closeDeleteServerModal();
+
+  const remainingServerIds = Object.keys(ServersData);
+  if (remainingServerIds.length > 0) {
+    AppState.viewMode = 'server';
+    AppState.currentServerId = remainingServerIds[0];
+    const nextServer = ServersData[AppState.currentServerId];
+    const firstChannel = nextServer.categories[0]?.channels[0] || nextServer.categories[1]?.channels[0];
+    if (firstChannel) {
+      AppState.currentChannelId = firstChannel.id;
+      AppState.currentChannelName = firstChannel.name;
+      AppState.currentChannelTopic = firstChannel.topic || '';
+    }
+    renderServers();
+    switchToServerView();
+  } else {
+    switchToFriendsView();
+  }
+
+  showToast(`Servidor "${serverName}" excluído.`);
+}
+
+function toggleServerDropdownMenu(e) {
+  e?.stopPropagation();
+  const menu = document.getElementById('server-dropdown-menu');
+  if (!menu) return;
+  if (menu.style.display === 'none' || !menu.style.display) {
+    const headerBtn = document.getElementById('server-header-btn');
+    if (headerBtn) {
+      const rect = headerBtn.getBoundingClientRect();
+      menu.style.top = `${rect.bottom + 4}px`;
+      menu.style.left = `${rect.left + 8}px`;
+    }
+    menu.style.display = 'block';
+  } else {
+    menu.style.display = 'none';
+  }
+}
+
+function hideServerDropdownMenu() {
+  const menu = document.getElementById('server-dropdown-menu');
+  if (menu) menu.style.display = 'none';
 }
 
 // 4. RENDER SERVERS
@@ -1120,13 +1462,16 @@ function renderServers() {
     wrapper.className = `guild-item-wrapper ${isActive ? 'active' : ''}`;
     wrapper.dataset.serverId = serverId;
 
+    const bgStyle = server.color ? `background-color: ${server.color};` : '';
+
     wrapper.innerHTML = `
       <div class="guild-pill"></div>
-      <div class="guild-icon-btn" title="${server.name}">
+      <div class="guild-icon-btn" style="${bgStyle}" title="${server.name} (Clique com botão direito para opções)">
         ${server.iconText}
       </div>
     `;
 
+    // Left click: select server
     wrapper.addEventListener('click', () => {
       AppState.viewMode = 'server';
       AppState.currentServerId = serverId;
@@ -1134,7 +1479,7 @@ function renderServers() {
       document.querySelectorAll('.guild-item-wrapper').forEach(el => el.classList.remove('active'));
       wrapper.classList.add('active');
 
-      const firstChannel = server.categories[1]?.channels[0] || server.categories[0]?.channels[0];
+      const firstChannel = server.categories[0]?.channels[0] || server.categories[1]?.channels[0];
       if (firstChannel) {
         AppState.currentChannelId = firstChannel.id;
         AppState.currentChannelName = firstChannel.name;
@@ -1142,6 +1487,13 @@ function renderServers() {
       }
 
       switchToServerView();
+    });
+
+    // Right click: delete context action
+    wrapper.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openDeleteServerModal(serverId);
     });
 
     container.appendChild(wrapper);
@@ -1814,10 +2166,63 @@ function setupEventListeners() {
   // Voice Controls
   document.getElementById('voice-share-screen-btn')?.addEventListener('click', toggleScreenShare);
   document.getElementById('voice-camera-btn')?.addEventListener('click', toggleCamera);
+  document.getElementById('panel-camera-btn')?.addEventListener('click', toggleCamera);
+  document.getElementById('panel-share-screen-btn')?.addEventListener('click', toggleScreenShare);
   document.getElementById('disconnect-voice-btn')?.addEventListener('click', disconnectVoice);
   document.getElementById('voice-room-leave-btn')?.addEventListener('click', disconnectVoice);
   document.getElementById('voice-room-close-btn')?.addEventListener('click', () => {
     document.getElementById('voice-room-overlay')?.classList.remove('active');
+  });
+
+  // Clicking on voice connection box opens the voice room overlay
+  document.getElementById('voice-connected-panel')?.addEventListener('click', (e) => {
+    if (e.target.closest('#disconnect-voice-btn') || e.target.closest('#panel-camera-btn') || e.target.closest('#panel-share-screen-btn')) {
+      return;
+    }
+    const overlay = document.getElementById('voice-room-overlay');
+    if (overlay) overlay.classList.toggle('active');
+  });
+
+  // Server Header Dropdown & Management
+  document.getElementById('server-header-btn')?.addEventListener('click', (e) => {
+    toggleServerDropdownMenu(e);
+  });
+  document.getElementById('menu-invite-btn')?.addEventListener('click', () => {
+    copyInviteLink();
+    hideServerDropdownMenu();
+  });
+  document.getElementById('menu-delete-server-btn')?.addEventListener('click', () => {
+    openDeleteServerModal(AppState.currentServerId);
+  });
+
+  // Add Server Modal
+  document.getElementById('add-server-btn')?.addEventListener('click', openCreateServerModal);
+  document.getElementById('confirm-create-server-btn')?.addEventListener('click', handleCreateServerConfirm);
+  document.getElementById('cancel-create-server-btn')?.addEventListener('click', closeCreateServerModal);
+  document.getElementById('create-server-modal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'create-server-modal') closeCreateServerModal();
+  });
+  document.getElementById('new-server-name-input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleCreateServerConfirm();
+    }
+  });
+
+  // Server Color Picker Choices
+  document.querySelectorAll('#server-color-picker .color-dot-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#server-color-picker .color-dot-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      selectedServerColor = btn.dataset.color || '#5865f2';
+    });
+  });
+
+  // Delete Server Modal
+  document.getElementById('confirm-delete-server-btn')?.addEventListener('click', handleDeleteServerConfirm);
+  document.getElementById('cancel-delete-server-btn')?.addEventListener('click', closeDeleteServerModal);
+  document.getElementById('delete-server-modal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'delete-server-modal') closeDeleteServerModal();
   });
 
   // Mute Mic button
@@ -1912,11 +2317,15 @@ function setupEventListeners() {
   document.addEventListener('click', (e) => {
     if (!e.target.closest('#user-popout')) hideUserPopout();
     if (!e.target.closest('#emoji-picker') && !e.target.closest('#emoji-picker-btn')) hideEmojiPicker();
+    if (!e.target.closest('#server-dropdown-menu') && !e.target.closest('#server-header-btn')) hideServerDropdownMenu();
   });
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       settingsModal?.classList.remove('open');
+      closeCreateServerModal();
+      closeDeleteServerModal();
+      hideServerDropdownMenu();
       hideUserPopout();
       hideEmojiPicker();
       document.getElementById('voice-room-overlay')?.classList.remove('active');

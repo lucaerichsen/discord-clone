@@ -169,7 +169,17 @@
             </svg>
           </button>
         </div>
-        <div class="voice-channel-connected-title" id="voice-channel-name">🔊 Lounge Geral</div>
+        <div class="voice-channel-connected-title" id="voice-channel-name">🔊 Geral</div>
+        <div class="voice-panel-quick-actions">
+          <button class="voice-quick-btn" id="panel-camera-btn" title="Ligar Câmera">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>
+            <span>Vídeo</span>
+          </button>
+          <button class="voice-quick-btn" id="panel-share-screen-btn" title="Compartilhar Tela">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.11-.9-2-2-2H4c-1.11 0-2 .89-2 2v10c0 1.1.89 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z"/></svg>
+            <span>Tela</span>
+          </button>
+        </div>
       </div>
 
       <!-- User Profile Control Bar -->
@@ -458,6 +468,60 @@
         <div class="esc-circle">✕</div>
         <span class="esc-text">ESC</span>
       </button>
+    </div>
+  </div>
+
+  <!-- Modal: Criar Servidor -->
+  <div class="discord-modal-backdrop" id="create-server-modal">
+    <div class="discord-modal-box">
+      <div class="discord-modal-header">
+        <h2>Criar seu servidor</h2>
+        <p>Seu servidor é onde você e seus amigos se reúnem. Crie o seu e comece a conversar por texto e voz.</p>
+      </div>
+      <div class="discord-modal-body">
+        <label class="discord-field-label">NOME DO SERVIDOR</label>
+        <input type="text" id="new-server-name-input" class="discord-text-input" placeholder="Servidor de Claudio" maxlength="32" />
+        <label class="discord-field-label" style="margin-top: 14px;">COR DO ÍCONE</label>
+        <div class="server-color-choices" id="server-color-picker">
+          <button class="color-dot-btn active" data-color="#5865f2" style="background: #5865f2;"></button>
+          <button class="color-dot-btn" data-color="#23a55a" style="background: #23a55a;"></button>
+          <button class="color-dot-btn" data-color="#eb459e" style="background: #eb459e;"></button>
+          <button class="color-dot-btn" data-color="#f47b97" style="background: #f47b97;"></button>
+          <button class="color-dot-btn" data-color="#f0b232" style="background: #f0b232;"></button>
+          <button class="color-dot-btn" data-color="#5833ea" style="background: #5833ea;"></button>
+        </div>
+      </div>
+      <div class="discord-modal-footer">
+        <button class="btn-ghost" id="cancel-create-server-btn">Voltar</button>
+        <button class="btn-primary" id="confirm-create-server-btn">Criar Servidor</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Excluir Servidor -->
+  <div class="discord-modal-backdrop" id="delete-server-modal">
+    <div class="discord-modal-box">
+      <div class="discord-modal-header">
+        <h2 style="color: #f23f43;">Excluir Servidor</h2>
+        <p id="delete-server-modal-desc">Você tem certeza que deseja excluir este servidor? Esta ação não pode ser desfeita.</p>
+      </div>
+      <div class="discord-modal-footer">
+        <button class="btn-ghost" id="cancel-delete-server-btn">Cancelar</button>
+        <button class="btn-danger" id="confirm-delete-server-btn">Excluir Servidor</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dropdown Menu do Servidor -->
+  <div class="server-dropdown-menu" id="server-dropdown-menu" style="display: none;">
+    <div class="dropdown-item" id="menu-invite-btn">
+      <span>Convidar Amigos</span>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm-9-2V7H4v3H1v2h3v3h2v-3h3v-2H6zm9 4c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+    </div>
+    <div class="dropdown-divider"></div>
+    <div class="dropdown-item danger" id="menu-delete-server-btn">
+      <span>Excluir Servidor</span>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
     </div>
   </div>
 
